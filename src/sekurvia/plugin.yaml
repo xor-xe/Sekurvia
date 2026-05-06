@@ -1,0 +1,12 @@
+name: sekurvia
+version: 0.1.0
+author: xor-xe
+description: Privacy-respecting web search via a SearXNG instance.
+provides_tools:
+  - web_search
+provides_hooks: []
+requires_env:
+  - name: SEARXNG_URL
+    description: "Base URL of your SearXNG instance (e.g. http://127.0.0.1:8888)"
+    url: "https://docs.searxng.org/"
+    secret: false
