@@ -1,81 +1,86 @@
 # Sekurvia
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-**Sekurvia** is a privacy-respecting web search plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent), backed by a [SearXNG](https://searxng.org/) instance. It exposes a single, well-described `web_search` tool, a hardened HTTP client, and an env-driven config — designed to drop into any Hermes deployment regardless of where it's hosted.
+**Sekurvia** is a Hermes Agent **skill** that gives the agent privacy-respecting web search through a self-hosted [SearXNG](https://searxng.org/) instance — no third-party API key, no SaaS round-trip.
 
-> **v0.1.1** — single `web_search` tool. Image / news / video / `fetch_url` are deliberately deferred so the surface area stays small and auditable. The architecture is built to extend cleanly (see [Extending](#extending) below).
+> **Skill, not plugin.** Hermes [skills](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills) are markdown documents the agent loads on demand (via `skill_view`) and a bundle of supporting helper scripts. They wrap CLIs/APIs without compiling Python code into Hermes core. Sekurvia is the SearXNG counterpart to the bundled `duckduckgo-search` skill.
 
----
-
-## Why a separate plugin?
-
-Hermes core ships strong primitives but no SearXNG integration. Sekurvia gives you:
-
-- **One narrowly-scoped LLM-facing tool** — the model picks it for general web queries with no ambiguity.
-- **Full control of the SearXNG endpoint** — works with `127.0.0.1:8888`, a LAN box, a public mirror, or an authenticated private instance.
-- **Defense in depth** — the search client only talks JSON, refuses to follow redirects, caps response size, validates result URLs against an allow/block-list, and never returns loopback/private/link-local hosts unless you explicitly allowlist them.
-- **Stateless, no on-disk state** — safe to run as the locked-down `nyxorn-agent` service user out of the box.
+This repo is a **skill tap** — one repo, one or more `<skill-name>/SKILL.md` directories — so it can grow to include `searxng-images`, `searxng-news`, etc. without restructuring.
 
 ---
 
-## Features
+## What's in v0.1.0
 
-- Single tool: `web_search` — query, max_results, language, safesearch, time_range, categories.
-- Hardened HTTP client: per-request timeout, exponential-backoff retries on 5xx / network errors, response-size cap, no redirect-follow, optional Bearer auth, configurable TLS verification.
-- Sanitized output: HTML stripped via stdlib, snippet length-capped, URLs validated, allow/block-list applied to every result.
-- Robust handler: always returns a JSON string (never raises), with a typed `kind` field (`ConfigError`, `ValidationError`, `NetworkError`, `RemoteError`, `InternalError`).
-- Dual distribution: works as a Hermes **directory plugin** (clone into `~/.hermes/plugins/`) **and** as an **entry-point Python package** (pip-installable / NixOS `extraPythonPackages`) — same `register(ctx)` contract on both paths thanks to a small repo-root `__init__.py` shim.
-- Zero external dependencies beyond `httpx` and `pyyaml` (which Hermes ships already).
-- 59 offline tests, no live SearXNG required.
+A single skill, `searxng-search`, focused on general web search:
+
+```text
+sekurvia/
+├── README.md                          ← this file
+├── LICENSE                            ← MIT
+├── .gitignore
+└── searxng-search/                    ← installable skill
+    ├── SKILL.md                       ← skill body (loaded by skill_view)
+    ├── scripts/
+    │   ├── searxng-query.sh           ← hardened curl+jq wrapper around the JSON API
+    │   └── searxng-health.sh          ← 10-second connectivity probe
+    └── references/
+        └── searxng-api.md             ← on-demand deeper API reference
+```
+
+Future siblings under the same root (planned):
+
+- `searxng-images/` — image-search shape with `categories=images`.
+- `searxng-news/` — fresh-news shape with `categories=news` + `time_range=day`.
+- `searxng-videos/` — video-search shape.
+
+Each is its own SKILL.md directory, installed independently.
 
 ---
 
 ## Install
 
-Three install paths. Pick whichever fits your Hermes deployment.
-
-### 1. Directory plugin (any Hermes install)
+### 1. From this GitHub repo (recommended)
 
 ```bash
-git clone https://github.com/xor-xe/sekurvia ~/.hermes/plugins/sekurvia
-export SEARXNG_URL=http://127.0.0.1:8888
+hermes skills install xor-xe/sekurvia/searxng-search
 ```
 
-Then enable it in your Hermes `config.yaml`:
+Hermes fetches the skill from `github.com/xor-xe/sekurvia` at the
+`searxng-search/` subpath, runs its security scanner, and copies it
+to `~/.hermes/skills/research/searxng-search/`.
 
-```yaml
-plugins:
-  enabled:
-    - sekurvia
-```
-
-Verify:
+### 2. Direct URL (single-file SKILL.md)
 
 ```bash
-hermes plugins
-# Plugins (1):
-#   ✓ sekurvia v0.1.1 (1 tools)
+hermes skills install \
+  https://raw.githubusercontent.com/xor-xe/sekurvia/main/searxng-search/SKILL.md \
+  --name searxng-search
 ```
 
-> The repo ships a tiny root [`__init__.py`](__init__.py) shim so Hermes' directory-plugin loader (which imports `<plugin-dir>/__init__.py` directly) finds Sekurvia's real package under `src/sekurvia/`. The shim is excluded from the built wheel by `setuptools.packages.find { where = ["src"] }`, so the pip / `extraPythonPackages` path is unchanged. Same `register(ctx)` works on both layouts.
+This installs only `SKILL.md`. The helper scripts under `scripts/` are
+**not** included via direct URL install — use the GitHub path above for
+the full bundle.
 
-### 2. Pip-installable package
+### 3. Manual / dev install
 
 ```bash
-pip install sekurvia
+git clone https://github.com/xor-xe/sekurvia ~/code/sekurvia
+mkdir -p ~/.hermes/skills/research
+ln -s ~/code/sekurvia/searxng-search ~/.hermes/skills/research/searxng-search
 ```
 
-The `hermes_agent.plugins` entry point in `pyproject.toml` makes it auto-discoverable on the next `hermes` startup. Set `SEARXNG_URL` in the same shell / unit / `.env` Hermes loads, and add `sekurvia` to `plugins.enabled` as above.
+A symlink is preferred for development so edits in your checkout take
+effect immediately. For a copy install, replace `ln -s` with `cp -r`.
 
-### 3. NixOS via [nyxorn](https://github.com/xor-xe/nyxorn)
+### 4. NixOS via [nyxorn](https://github.com/xor-xe/nyxorn)
 
-Sekurvia drops into the existing `services.aiAgent.hermes.extraPlugins` slot — no module changes needed in nyxorn.
+`services.aiAgent.enableSearxng = true;` already starts a local SearXNG
+on `127.0.0.1:8888` and exposes `SEARXNG_URL` to Hermes. You only need
+to install the skill itself:
 
 ```nix
-{ pkgs, config, ... }:
-{
+{ config, ... }: {
   services.aiAgent = {
     enable = true;
     engine = "hermes";
@@ -84,149 +89,197 @@ Sekurvia drops into the existing `services.aiAgent.hermes.extraPlugins` slot —
     searxng.secretKey = "<openssl rand -hex 32>";
 
     hermes = {
-      extraPlugins = [
-        (pkgs.fetchFromGitHub {
-          owner = "user";
-          repo = "sekurvia";
-          rev = "v0.1.1";
-          hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-        })
-      ];
+      # nyxorn already exposes SEARXNG_URL=http://127.0.0.1:8888 to Hermes
+      # automatically when enableSearxng = true. The skill picks it up.
 
-      settings.plugins.enabled = [ "sekurvia" ];
-
-      environment = {
-        SEARXNG_URL = "http://127.0.0.1:8888";
+      documents = {
+        # Drop the skill bundle into HERMES_HOME at activation time.
+        "skills/research/searxng-search" = {
+          source = pkgs.fetchFromGitHub {
+            owner = "user";
+            repo  = "sekurvia";
+            rev   = "v0.1.0";
+            hash  = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+          } + "/searxng-search";
+        };
       };
     };
   };
 }
 ```
 
-If you'd rather install via the entry point, swap `extraPlugins` for `extraPythonPackages` and build a `pkgs.python312Packages.buildPythonPackage` against this repo (see the upstream [Hermes Nix-setup guide](https://hermes-agent.nousresearch.com/docs/getting-started/nix-setup#plugins)).
+(If your nyxorn version doesn't expose `documents` for nested-path
+mounts, fall back to the manual install in Section 3 — it's a one-line
+symlink against `/var/lib/nyxorn-agent/.hermes/skills/research/`.)
 
 ---
 
 ## Configuration
 
-All knobs are environment variables. Only `SEARXNG_URL` is required; everything else has sensible defaults.
+The skill needs **one** environment variable to function. Hermes prompts
+for it the first time the skill is loaded if it isn't already set.
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `SEARXNG_URL` | yes | Base URL of your SearXNG instance. Must include scheme. Example: `http://127.0.0.1:8888`. |
+| `SEKURVIA_AUTH_TOKEN` | no | `Authorization: Bearer …` for protected SearXNG instances. Skip for local use. |
+
+Optional tuning vars (the skill picks sensible defaults; only set when
+you know you need them):
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SEARXNG_URL` | *(required)* | Base URL of your SearXNG instance. Must be `http://` or `https://`. |
-| `SEKURVIA_TIMEOUT_S` | `10` | Per-request timeout in seconds (float). |
-| `SEKURVIA_MAX_RESULTS` | `10` | Default max results returned. Hard cap: 50. |
-| `SEKURVIA_SAFESEARCH` | `1` | Default safesearch level: `0` off, `1` moderate, `2` strict. |
-| `SEKURVIA_LANGUAGE` | `auto` | Default ISO language code passed to SearXNG (`en`, `de`, `auto`, ...). |
-| `SEKURVIA_AUTH_TOKEN` | *(unset)* | Optional `Authorization: Bearer ...` for protected SearXNG instances. |
-| `SEKURVIA_VERIFY_TLS` | `true` | Set to `false` only for self-signed dev instances. |
-| `SEKURVIA_USER_AGENT` | `sekurvia/0.1 (+hermes-plugin)` | UA sent to SearXNG. |
-| `SEKURVIA_ALLOWED_DOMAINS` | *(unset)* | Comma-separated domain allowlist. Subdomains match. If set, **only** these are returned. |
-| `SEKURVIA_BLOCKED_DOMAINS` | *(unset)* | Comma-separated domain blocklist. Subdomains match. |
-| `SEKURVIA_MAX_SNIPPET` | `500` | Max characters per result snippet (HTML stripped, then truncated). |
-| `SEKURVIA_MAX_QUERY_CHARS` | `1024` | Max query length; longer queries are truncated. |
-| `SEKURVIA_MAX_RESPONSE_BYTES` | `2097152` (2 MiB) | Refuse SearXNG responses larger than this. Hard cap: 16 MiB. |
-| `SEKURVIA_RETRIES` | `2` | Retries on 5xx / network errors. |
-| `SEKURVIA_RETRY_BACKOFF_S` | `0.25` | Base backoff in seconds; doubled per attempt. |
+| `SEKURVIA_TIMEOUT_S` | `10` | Per-request timeout in seconds. |
+| `SEKURVIA_MAX_RESULTS` | `10` | Default `--max-results` for the helper. Hard cap: 50. |
+| `SEKURVIA_SAFESEARCH` | `1` | Default safesearch level: 0 off / 1 moderate / 2 strict. |
+| `SEKURVIA_LANGUAGE` | `auto` | Default ISO language code. |
+| `SEKURVIA_USER_AGENT` | `hermes-searxng-skill/0.1` | UA sent to SearXNG. |
+| `SEKURVIA_ALLOWED_DOMAINS` | unset | Comma-separated allowlist; if set, only matching hosts are returned. |
+| `SEKURVIA_BLOCKED_DOMAINS` | unset | Comma-separated blocklist. |
+| `SEKURVIA_MAX_RESPONSE_BYTES` | `2097152` (2 MiB) | Response size cap. Hard cap: 16 MiB. |
+| `SEKURVIA_MAX_SNIPPET` | `500` | Per-result snippet truncation length. |
+| `SEKURVIA_HEALTH_TIMEOUT_S` | `5` | Timeout for `searxng-health.sh`. |
 
-Settings are parsed once per process and validated up-front; bad values fail fast with a `ConfigError`.
+Hermes `required_environment_variables` machinery handles the
+`SEARXNG_URL` and `SEKURVIA_AUTH_TOKEN` prompts on first use; the rest
+are read from the agent's environment if set, otherwise the bundled
+defaults apply.
 
 ---
 
-## Usage
+## How the skill is used
 
-Once enabled, the agent sees `web_search` in its tool list. Typical prompts that should trigger it:
+Once installed, the agent can:
 
-```
-What's the latest stable Hermes Agent release?
-Find the upstream docs for SearXNG's JSON API.
-Recent NixOS news this week
-```
+1. Run `/searxng-search` as a slash command — Hermes loads the SKILL.md
+   into the model's context.
+2. Have the model call the helper:
+   ```bash
+   bash "$HERMES_HOME/skills/research/searxng-search/scripts/searxng-query.sh" \
+        -q "fastapi deployment guide" -n 5
+   ```
+   …and pipe the JSON to `jq` for parsing.
+3. Run `searxng-health.sh` first if it suspects the instance is down.
+4. Load `references/searxng-api.md` via
+   `skill_view("searxng-search", "references/searxng-api.md")` for
+   deeper API detail (engines, categories, response shape).
 
-The handler returns a single JSON string of this shape:
-
-```json
-{
-  "query": "hermes agent",
-  "count": 2,
-  "results": [
-    {
-      "title": "NousResearch/hermes-agent",
-      "url": "https://github.com/NousResearch/hermes-agent",
-      "snippet": "The agent that grows with you.",
-      "engine": "github",
-      "score": 0.83
-    },
-    {
-      "title": "Hermes Agent Docs",
-      "url": "https://hermes-agent.nousresearch.com/",
-      "snippet": "Official Hermes Agent documentation site.",
-      "engine": "duckduckgo"
-    }
-  ]
-}
-```
-
-On any failure the handler still returns JSON, never raises:
-
-```json
-{ "error": "SearXNG request timed out: ...", "kind": "NetworkError" }
-```
-
-| `kind` | Meaning |
-| --- | --- |
-| `ConfigError` | `SEARXNG_URL` missing or some env var failed validation. |
-| `ValidationError` | Tool args were malformed (empty query, bad `safesearch`, etc.). |
-| `NetworkError` | Timeout, connection error, DNS failure. |
-| `RemoteError` | SearXNG returned non-2xx, non-JSON, oversized, or malformed body. The `status_code` field is included when available. |
-| `InternalError` | Unexpected exception. Logged with full traceback at `ERROR` level; never propagates. |
+The skill auto-hides itself when Hermes' built-in `web_search` tool is
+available (via `fallback_for_toolsets: [web]`), so it doesn't clutter
+the context for users who already have a SaaS web tool wired up.
 
 ---
 
 ## Security model
 
-Defense-in-depth is the explicit design goal. Each layer is small enough to audit on its own:
+Defense-in-depth, defined as conventions the skill teaches the agent and
+hard-enforced inside the helper scripts:
 
-- **Loading-gate** — `requires_env: SEARXNG_URL` in `plugin.yaml` lets Hermes disable the plugin cleanly when unconfigured rather than fail-open.
-- **Transport** — `httpx.AsyncClient` with explicit timeout, `follow_redirects=False`, `verify_tls=True` by default, optional `Bearer` token, response size capped via streaming.
-- **Retries** — bounded exponential backoff on 5xx / network errors only; 4xx never retried.
-- **Input validation** — query length cap, integer/enum bounds on every parameter; bad values surface as `ValidationError` JSON.
-- **Output sanitization** — every result row passes through `clean_result`:
-  - HTML stripped via stdlib `html.parser` (no extra deps), `<script>`/`<style>` content dropped, whitespace collapsed, snippet truncated.
-  - URLs revalidated through `is_safe_url` — http/https only, hostname not loopback/link-local/private/multicast/reserved unless explicitly allowlisted.
-  - Domain allowlist / blocklist applied last.
-- **Error surface** — `Exception` is swallowed and logged, never returned to the agent. Typed errors carry only their human-readable message.
-- **Logging** — query lengths only at `DEBUG`; raw queries, results, or tokens are **never** logged.
-- **No SSRF in v0.1.0** — `web_search` only returns metadata. `is_safe_url` is in place ready for a future `fetch_url` companion tool.
-- **Stateless** — no on-disk state, no global singletons beyond the validated `Settings` cache.
+- **Localhost by default** — operators are guided to set
+  `SEARXNG_URL=http://127.0.0.1:8888`. Queries never leave the host.
+- **No redirect following** — `curl --fail` plus explicit non-redirect
+  flags prevent being bounced off-instance.
+- **Response size cap** — 2 MiB via `curl --max-filesize`; refuse
+  larger bodies as `RemoteError` instead of trying to parse them.
+- **HTML stripping** — every `title` / `snippet` is run through `jq`
+  filters to drop tag soup before the model sees it.
+- **URL filtering** — the helper drops result URLs whose host resolves
+  to loopback / link-local / private / multicast / reserved space
+  unless explicitly allowlisted.
+- **Optional bearer auth** — `SEKURVIA_AUTH_TOKEN` is only sent when
+  set, never logged, and surfaced via Hermes' secure setup prompt.
+- **No content fetching** — the skill never visits result URLs.
+  Agents that want page bodies must use a separate fetcher
+  (`web_extract`, browser tools) with its own SSRF guard.
+- **Strict timeouts** — every curl invocation has `--max-time` bounded.
+- **JSON-only output** — every error path emits a typed JSON object
+  (`{"error": "...", "kind": "..."}`), never a partial body.
 
 ---
 
-## Layout
+## Verifying the install
+
+After installing, run from a Hermes session:
+
+```text
+/searxng-search "what is hermes agent"
+```
+
+The agent should:
+
+1. See `SEARXNG_URL` is set (or prompt you to set it).
+2. Call `searxng-health.sh` and confirm the instance is up + JSON enabled.
+3. Call `searxng-query.sh -q "what is hermes agent" -n 5` and return a
+   list of titles + URLs + snippets.
+
+If step 2 fails with `JSON format is NOT enabled`, add `json` to your
+SearXNG instance's `settings.yml`:
+
+```yaml
+search:
+  formats:
+    - html
+    - json
+```
+
+…and restart SearXNG. (nyxorn does this for you when
+`services.aiAgent.enableSearxng = true`.)
+
+---
+
+## Extending — adding image / news / video skills
+
+The repo is a tap, so adding a sibling skill is a matter of dropping a
+new directory next to `searxng-search/`. Recommended layout for a new
+skill `searxng-news`:
 
 ```text
 sekurvia/
-├── plugin.yaml                  # Hermes manifest (directory-plugin form)
-├── pyproject.toml               # Pip / NixOS form + hermes_agent.plugins entry point
-├── README.md
-├── LICENSE
-├── src/
-│   └── sekurvia/
-│       ├── __init__.py          # register(ctx)
-│       ├── plugin.yaml          # Same manifest, shipped inside the wheel
-│       ├── config.py            # Settings dataclass + env parsing
-│       ├── client.py            # Async SearXNG HTTP client
-│       ├── sanitize.py          # HTML strip, URL safety, result cleaner
-│       ├── schemas.py           # WEB_SEARCH tool schema (LLM-facing)
-│       ├── tools.py             # web_search async handler
-│       └── errors.py            # Typed errors
-└── tests/
-    ├── conftest.py
-    ├── test_config.py
-    ├── test_sanitize.py
-    ├── test_client.py
-    └── test_tools.py
+├── searxng-search/
+└── searxng-news/
+    ├── SKILL.md                       ← describe news-specific flow
+    └── scripts/
+        └── searxng-news.sh            ← thin wrapper that calls
+                                        searxng-query.sh with
+                                        --categories news --time-range day
 ```
+
+Reuse the existing `scripts/searxng-query.sh` — it already supports
+`--categories` and `--time-range`. The new SKILL.md mostly explains
+when the agent should reach for news vs general search, what fields to
+expect, and how to format the answer.
+
+Install paths stay independent:
+
+```bash
+hermes skills install xor-xe/sekurvia/searxng-news
+```
+
+That's the whole expansion story — no shared Python package, no
+versioned plugin entry point, no rebuild.
+
+---
+
+## Migration from the v0.1.0 plugin shape
+
+Earlier drafts of Sekurvia shipped as a Hermes **plugin** (a Python
+package registering a `web_search` tool). That's a valid pattern but
+overkill for "wrap a CLI/API and tell the agent how to use it" — which
+is exactly what skills are designed for.
+
+If you installed the previous plugin shape:
+
+```bash
+# remove the old plugin install, if any
+rm -rf ~/.hermes/plugins/sekurvia
+sed -i '/^\s*-\s*sekurvia\s*$/d' ~/.hermes/config.yaml   # drop from plugins.enabled
+pip uninstall -y sekurvia 2>/dev/null || true
+
+# install the skill
+hermes skills install xor-xe/sekurvia/searxng-search
+```
+
+Your `SEARXNG_URL` env var carries over unchanged.
 
 ---
 
@@ -235,73 +288,30 @@ sekurvia/
 ```bash
 git clone https://github.com/xor-xe/sekurvia
 cd sekurvia
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -e ".[dev]"
-pytest        # 55 tests, all offline (respx mocks httpx)
-ruff check src tests
+
+# Validate SKILL.md frontmatter
+python3 -c '
+import re, sys, yaml, pathlib
+p = pathlib.Path("searxng-search/SKILL.md").read_text()
+m = re.match(r"^---\n(.*?)\n---\n", p, re.S)
+assert m, "frontmatter missing"
+fm = yaml.safe_load(m.group(1))
+assert fm["name"] == "searxng-search"
+assert len(fm["description"]) <= 1024
+print("ok:", fm["name"], "v" + fm["version"])
+'
+
+# Lint the helpers
+shellcheck searxng-search/scripts/*.sh
+
+# Smoke-test the helper end-to-end against your SearXNG
+SEARXNG_URL=http://127.0.0.1:8888 \
+  bash searxng-search/scripts/searxng-health.sh
+
+SEARXNG_URL=http://127.0.0.1:8888 \
+  bash searxng-search/scripts/searxng-query.sh -q "hermes agent" -n 3 \
+  | jq .
 ```
-
-Tests don't need a live SearXNG; `respx` intercepts every HTTP call.
-
----
-
-## Extending
-
-The architecture is intentionally split so each new feature is a small, isolated addition.
-
-### Add another tool (e.g. `image_search`)
-
-1. Drop a new schema into `schemas.py` (one constant per tool).
-2. Add an async handler to `tools.py` — same `(args, **kwargs) -> JSON-string` contract.
-3. Register it in `__init__.py`:
-
-   ```python
-   ctx.register_tool(
-       name="image_search",
-       toolset="sekurvia",
-       schema=schemas.IMAGE_SEARCH,
-       handler=tools.image_search,
-       is_async=True,
-       requires_env=["SEARXNG_URL"],
-   )
-   ```
-
-4. List it in `plugin.yaml#provides_tools`.
-
-The `SearxngClient` already accepts a `categories` argument (`["images"]`, `["news"]`, `["videos"]`, …), so most new tools are a thin wrapper plus a tighter result schema.
-
-### Add config
-
-Extend the `Settings` dataclass in `config.py`, add a `_get_*` line in `from_env`, and document the env var here.
-
-### Add a hook (caching, query redaction, …)
-
-Create `hooks.py`, register the callback in `__init__.py`:
-
-```python
-ctx.register_hook("post_tool_call", hooks.cache_result)
-```
-
-…and list the hook name under `provides_hooks` in `plugin.yaml`.
-
-### Add a `fetch_url` tool
-
-`is_safe_url` is already designed for this. The recommended shape is a separate handler that:
-
-1. Re-validates the URL (defense in depth — the agent might pass any URL).
-2. Uses a fresh `httpx.AsyncClient` with the same hardening profile (no redirects, response cap, timeout).
-3. Strips HTML before returning.
-
-Out of scope for v0.1.0; planned for a later release.
-
----
-
-## Roadmap
-
-- v0.2: `image_search`, `news_search`, `video_search`.
-- v0.3: optional `fetch_url` with SSRF guards and content-type allowlist.
-- v0.4: `flake.nix` (plugin + python-package derivations), GitHub Actions CI, bundled `SKILL.md`, `/sekurvia` slash command for diagnostics.
 
 ---
 
