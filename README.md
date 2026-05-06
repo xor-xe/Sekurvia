@@ -5,7 +5,7 @@
 
 **Sekurvia** is a privacy-respecting web search plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent), backed by a [SearXNG](https://searxng.org/) instance. It exposes a single, well-described `web_search` tool, a hardened HTTP client, and an env-driven config — designed to drop into any Hermes deployment regardless of where it's hosted.
 
-> **v0.1.0** — single `web_search` tool. Image / news / video / `fetch_url` are deliberately deferred so the surface area stays small and auditable. The architecture is built to extend cleanly (see [Extending](#extending) below).
+> **v0.1.1** — single `web_search` tool. Image / news / video / `fetch_url` are deliberately deferred so the surface area stays small and auditable. The architecture is built to extend cleanly (see [Extending](#extending) below).
 
 ---
 
@@ -26,9 +26,9 @@ Hermes core ships strong primitives but no SearXNG integration. Sekurvia gives y
 - Hardened HTTP client: per-request timeout, exponential-backoff retries on 5xx / network errors, response-size cap, no redirect-follow, optional Bearer auth, configurable TLS verification.
 - Sanitized output: HTML stripped via stdlib, snippet length-capped, URLs validated, allow/block-list applied to every result.
 - Robust handler: always returns a JSON string (never raises), with a typed `kind` field (`ConfigError`, `ValidationError`, `NetworkError`, `RemoteError`, `InternalError`).
-- Dual distribution: works as a Hermes **directory plugin** (clone into `~/.hermes/plugins/`) **and** as an **entry-point Python package** (pip-installable / NixOS `extraPythonPackages`).
+- Dual distribution: works as a Hermes **directory plugin** (clone into `~/.hermes/plugins/`) **and** as an **entry-point Python package** (pip-installable / NixOS `extraPythonPackages`) — same `register(ctx)` contract on both paths thanks to a small repo-root `__init__.py` shim.
 - Zero external dependencies beyond `httpx` and `pyyaml` (which Hermes ships already).
-- 55 offline tests, no live SearXNG required.
+- 59 offline tests, no live SearXNG required.
 
 ---
 
@@ -56,8 +56,10 @@ Verify:
 ```bash
 hermes plugins
 # Plugins (1):
-#   ✓ sekurvia v0.1.0 (1 tools)
+#   ✓ sekurvia v0.1.1 (1 tools)
 ```
+
+> The repo ships a tiny root [`__init__.py`](__init__.py) shim so Hermes' directory-plugin loader (which imports `<plugin-dir>/__init__.py` directly) finds Sekurvia's real package under `src/sekurvia/`. The shim is excluded from the built wheel by `setuptools.packages.find { where = ["src"] }`, so the pip / `extraPythonPackages` path is unchanged. Same `register(ctx)` works on both layouts.
 
 ### 2. Pip-installable package
 
@@ -86,7 +88,7 @@ Sekurvia drops into the existing `services.aiAgent.hermes.extraPlugins` slot —
         (pkgs.fetchFromGitHub {
           owner = "user";
           repo = "sekurvia";
-          rev = "v0.1.0";
+          rev = "v0.1.1";
           hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
         })
       ];

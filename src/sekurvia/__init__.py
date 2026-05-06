@@ -16,7 +16,7 @@ from . import schemas, tools
 
 __all__ = ["__version__", "register"]
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 
 def register(ctx: Any) -> None:

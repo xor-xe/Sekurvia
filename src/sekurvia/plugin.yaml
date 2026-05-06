@@ -1,5 +1,5 @@
 name: sekurvia
-version: 0.1.0
+version: 0.1.1
 author: xor-xe
 description: Privacy-respecting web search via a SearXNG instance.
 provides_tools:

@@ -1,6 +1,6 @@
 [project]
 name = "sekurvia"
-version = "0.1.0"
+version = "0.1.1"
 description = "Privacy-respecting web search plugin for Hermes Agent (SearXNG)."
 readme = "README.md"
 requires-python = ">=3.11"
