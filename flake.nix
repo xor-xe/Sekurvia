@@ -17,7 +17,7 @@
 
           sekurvia-mcp = py.buildPythonApplication {
             pname = "sekurvia-mcp";
-            version = "0.3.0";
+            version = "0.3.1";
             pyproject = true;
             src = ./.;
 

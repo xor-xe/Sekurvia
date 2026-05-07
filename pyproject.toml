@@ -1,6 +1,6 @@
 [project]
 name = "sekurvia-mcp"
-version = "0.3.0"
+version = "0.3.1"
 description = "Hermes Agent MCP server that exposes self-hosted SearXNG search and trafilatura-based content extraction as `mcp_sekurvia_search` and `mcp_sekurvia_read`."
 readme = "README.md"
 license = { text = "MIT" }
