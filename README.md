@@ -153,20 +153,40 @@ Once installed, the agent can:
 
 1. Run `/searxng-search` as a slash command — Hermes loads the SKILL.md
    into the model's context.
-2. Have the model call the helper:
+2. **If an `mcp_searxng_*` MCP toolset is exposed** (e.g. via the
+   upstream [`mcp-searxng`](https://github.com/ihor-sokoliuk/mcp-searxng)
+   server), call `mcp_searxng_searxng_web_search` directly with
+   `{query, pageno?, time_range?, language?, safesearch?}` — no shell
+   needed. SKILL.md teaches the model the correct argument shape so it
+   doesn't hallucinate a tool literally named `searxng-search` or pass
+   non-existent fields like `recency_days` / `categories` / `max_results`.
+3. Otherwise, have the model call the bundled helper via `terminal`:
    ```bash
    bash "$HERMES_HOME/skills/research/searxng-search/scripts/searxng-query.sh" \
         -q "fastapi deployment guide" -n 5
    ```
    …and pipe the JSON to `jq` for parsing.
-3. Run `searxng-health.sh` first if it suspects the instance is down.
-4. Load `references/searxng-api.md` via
+4. Run `searxng-health.sh` first if it suspects the instance is down.
+5. Load `references/searxng-api.md` via
    `skill_view("searxng-search", "references/searxng-api.md")` for
    deeper API detail (engines, categories, response shape).
 
 The skill auto-hides itself when Hermes' built-in `web_search` tool is
 available (via `fallback_for_toolsets: [web]`), so it doesn't clutter
-the context for users who already have a SaaS web tool wired up.
+the context for users who already have a SaaS web tool wired up. When
+only the MCP `searxng` tools are present (no `web_search`), the skill
+stays loaded — its job there is precisely to teach the model the right
+argument shape for those MCP tools.
+
+> **`searxng-search` is the skill name, not a tool name.** A common
+> failure mode is the model emitting a tool call with
+> `name: "searxng-search"`, which Hermes rejects with
+> `Tool 'searxng-search' does not exist.` The SKILL.md body now has a
+> prominent "Not a tool" callout instructing the model to invoke
+> `mcp_searxng_searxng_web_search` (or `terminal` running the helper)
+> instead. If you still see the hallucination on a small model, prefer
+> a stricter / instruction-tuned model and confirm the skill is
+> actually being loaded into context.
 
 ---
 

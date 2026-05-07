@@ -1,12 +1,12 @@
 ---
 name: searxng-search
-description: Privacy-respecting web search via a self-hosted SearXNG instance. No third-party API key needed. Prefer the bundled `searxng-query.sh` helper when available; fall back to a single hardened `curl` call against the JSON API.
-version: 0.1.0
+description: Guidance (not a tool) for hitting a self-hosted SearXNG instance from Hermes. Teaches the model to call the real `mcp_searxng_searxng_web_search` MCP tool when present, or `terminal` running the bundled `searxng-query.sh` helper as a fallback. Use when an `mcp_searxng_*` tool is advertised, or when SEARXNG_URL is set.
+version: 0.2.0
 author: xor-xe
 license: MIT
 metadata:
   hermes:
-    tags: [search, searxng, web-search, privacy, self-hosted, fallback]
+    tags: [search, searxng, web-search, privacy, self-hosted, fallback, mcp]
     related_skills: [duckduckgo-search]
     fallback_for_toolsets: [web]
     fallback_for_tools: [web_search]
@@ -25,8 +25,25 @@ required_environment_variables:
 
 Privacy-respecting web search using a self-hosted [SearXNG](https://searxng.org/) instance. **No third-party API key required** — all queries go to the operator's own SearXNG, which aggregates results from upstream engines without leaking the user's identity to them.
 
+> ## ⚠ This is a SKILL, not a tool
+>
+> `searxng-search` is the *name of this guidance document*, not a callable function. **Do not** emit a tool call with `name: "searxng-search"` — the runtime will reject it with:
+>
+> ```text
+> Tool 'searxng-search' does not exist.
+> ```
+>
+> Instead, invoke one of the real tools your runtime advertises (in priority order):
+>
+> 1. **`mcp_searxng_searxng_web_search`** + **`mcp_searxng_web_url_read`** — preferred when these MCP tools are exposed. See [Method 0](#method-0-mcp-searxng-tool-preferred).
+> 2. **`terminal`** (or `execute_code`) running the bundled `searxng-query.sh` helper. See [Method 1](#method-1-bundled-helper-fallback).
+> 3. **`terminal`** running the hardened inline `curl` recipe. See [Method 2](#method-2-direct-curl-last-resort).
+>
+> Pick exactly **one** method per query — do not chain them. If none are available, surface that to the user; never invent a tool name.
+
 Preferred when:
 
+- An `mcp_searxng_*` toolset is exposed and the agent needs the right argument shape (this skill teaches it so the model doesn't hallucinate `recency_days` / `categories` / `max_results`).
 - `web_search` is unavailable (no `FIRECRAWL_API_KEY`).
 - The user explicitly wants self-hosted / privacy-respecting search.
 - Working in air-gapped or compliance-sensitive contexts where queries must not hit a SaaS provider.
@@ -50,8 +67,15 @@ Do **not** use this skill for:
 
 Always check what's actually reachable before issuing a query:
 
+```text
+# 0. Are MCP SearXNG tools advertised by the runtime?
+#    Look for `mcp_searxng_searxng_web_search` (and optionally
+#    `mcp_searxng_web_url_read`) in the available-tools list you were given
+#    at the start of the turn. If yes → use Method 0 and stop here.
+```
+
 ```bash
-# 1. Is the env var set?
+# 1. Is the env var set? (only relevant for Methods 1 & 2)
 [ -n "${SEARXNG_URL:-}" ] && echo "SEARXNG_URL=set" || echo "SEARXNG_URL=missing"
 
 # 2. Is the helper script available?
@@ -65,14 +89,94 @@ bash "${HERMES_HOME:-$HOME/.hermes}/skills/research/searxng-search/scripts/searx
 
 Decision tree:
 
-1. `SEARXNG_URL` missing → ask the user to set it (or run `hermes setup`); do not guess.
+0. `mcp_searxng_searxng_web_search` is in the advertised tool list → call it directly with the schema in [Method 0](#method-0-mcp-searxng-tool-preferred). Stop. Do not also shell out.
+1. MCP tool absent and `SEARXNG_URL` missing → ask the user to set it (or run `hermes setup`); do not guess.
 2. `searxng-health.sh` returns non-zero → tell the user the instance is unreachable or doesn't have `format=json` enabled, then fall back to `duckduckgo-search` if that's available.
 3. Helper script is installed → prefer it; it handles encoding, retries, size caps, and result validation for you.
-4. Helper missing but instance is up → use the inline `curl` recipe in [Method 2](#method-2-direct-curl-fallback) below.
+4. Helper missing but instance is up → use the inline `curl` recipe in [Method 2](#method-2-direct-curl-last-resort) below.
 
-## Method 1: Bundled Helper (Preferred)
+## Method 0: MCP `searxng` tool (Preferred)
 
-The skill ships with `scripts/searxng-query.sh` — a hardened wrapper around the SearXNG JSON API. Prefer it because it:
+When the runtime exposes an `mcp_searxng_*` toolset, prefer it over shelling out — the MCP server already handles encoding, JSON parsing, and timeout enforcement, and it returns structured data the model can read directly. Two tools are typically available:
+
+| Tool | Purpose |
+|------|---------|
+| `mcp_searxng_searxng_web_search` | Run a query; returns titles, URLs, and snippets. |
+| `mcp_searxng_web_url_read` | Fetch and return cleaned text from a single URL. |
+
+### `mcp_searxng_searxng_web_search` arguments
+
+The exact schema is published by the MCP server in your tool list — **read it from there before calling**. The standard shape exposed by the upstream `mcp-searxng` server is:
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `query` | string | yes | The search query. |
+| `pageno` | integer | no | Page number, default `1`. |
+| `time_range` | string | no | One of `day`, `month`, `year` (some servers also accept `week`). Engine-dependent — many engines silently ignore it. |
+| `language` | string | no | ISO 639-1 code, or `all` / `auto`. |
+| `safesearch` | string | no | `"0"`, `"1"`, or `"2"`. **Note**: usually a *string*, not an integer. |
+
+There is **no** `recency_days`, `categories` array, or `max_results` field on this tool — those are flags of the bundled `searxng-query.sh` helper, **not** MCP arguments. Do not pass them. If you need category filtering or a hard result cap, use [Method 1](#method-1-bundled-helper-fallback).
+
+Correct example:
+
+```json
+{
+  "name": "mcp_searxng_searxng_web_search",
+  "arguments": {
+    "query": "S&P 500 current price",
+    "time_range": "day",
+    "language": "en",
+    "safesearch": "1"
+  }
+}
+```
+
+Incorrect example (this is what the model has been hallucinating — **do not do this**):
+
+```json
+{
+  "name": "searxng-search",
+  "arguments": {
+    "query": "S&P 500 current price",
+    "recency_days": 0,
+    "categories": [],
+    "max_results": 5
+  }
+}
+```
+
+The `name` is the wrong tool, and `recency_days` / `categories` / `max_results` aren't part of the MCP schema.
+
+### `mcp_searxng_web_url_read` arguments
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `url` | string | yes | Absolute URL of a result returned by the search tool. |
+
+Use this only after a search; do not feed it arbitrary URLs the user typed without confirming the host.
+
+### Search-then-read pattern
+
+```text
+1. Call mcp_searxng_searxng_web_search { "query": "..." }
+2. Pick the most relevant result URL from the response.
+3. Call mcp_searxng_web_url_read { "url": "..." } to read that page.
+4. Cite the URL in the answer.
+```
+
+### When to fall through to Method 1
+
+Use the bash helper instead when:
+
+- You need result filtering by category (`it`, `science`, `news`, `images`, …) — most MCP servers don't expose `categories`.
+- You need the helper's domain allow/block-list enforcement (`SEKURVIA_ALLOWED_DOMAINS` / `SEKURVIA_BLOCKED_DOMAINS`).
+- You need a hard `--max-results` cap or the `compact` output format for downstream shell parsing.
+- The MCP server returns an error indicating SearXNG is misconfigured (e.g. `format=json` disabled). The bash helper's error envelope is more diagnostic in that case.
+
+## Method 1: Bundled Helper (Fallback)
+
+The skill ships with `scripts/searxng-query.sh` — a hardened wrapper around the SearXNG JSON API. Prefer it (over Method 2) when MCP isn't available, because it:
 
 - URL-encodes the query correctly (no shell-injection risk).
 - Sends `Authorization: Bearer …` when `SEKURVIA_AUTH_TOKEN` is set.
@@ -168,9 +272,9 @@ On any error the helper exits non-zero and emits a single JSON object with `erro
 | `RemoteError` | Non-2xx, non-JSON, or oversized response. | If 403, JSON format is probably disabled in `settings.yml`. |
 | `ValidationError` | Bad query / args. | Re-issue the call with corrected flags. |
 
-## Method 2: Direct `curl` Fallback
+## Method 2: Direct `curl` (Last Resort)
 
-If the helper script isn't installed (e.g. the agent is running the skill content directly without supporting files), use this hardened one-liner:
+If neither the MCP tool (Method 0) nor the helper script (Method 1) is installed (e.g. the agent is running the skill content directly without supporting files), use this hardened one-liner:
 
 ```bash
 # Set defaults; override per call as needed
