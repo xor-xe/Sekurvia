@@ -1,7 +1,7 @@
 ---
 name: searxng-search
-description: Guidance (not a tool) for hitting a self-hosted SearXNG instance from Hermes. Teaches the model to call the real `mcp_searxng_searxng_web_search` MCP tool when present, or `terminal` running the bundled `searxng-query.sh` helper as a fallback. Use when an `mcp_searxng_*` tool is advertised, or when SEARXNG_URL is set.
-version: 0.2.0
+description: Guidance (not a tool) for hitting a self-hosted SearXNG instance from Hermes. Teaches the model to call the real `mcp_searxng_searxng_web_search` MCP tool when present, or `terminal` running the bundled `searxng-query.sh` helper as a fallback. Names the only two real environment variables (`SEARXNG_URL`, `SEKURVIA_AUTH_TOKEN`) so the model doesn't hallucinate fake ones like `REQUIRED_ENVIRONMENT_VARIABLES` or `SEKURVIA_ENABLED`.
+version: 0.2.1
 author: xor-xe
 license: MIT
 metadata:
@@ -40,6 +40,41 @@ Privacy-respecting web search using a self-hosted [SearXNG](https://searxng.org/
 > 3. **`terminal`** running the hardened inline `curl` recipe. See [Method 2](#method-2-direct-curl-last-resort).
 >
 > Pick exactly **one** method per query — do not chain them. If none are available, surface that to the user; never invent a tool name.
+
+> ## ⚠ Environment variables — canonical list
+>
+> This is the **complete and authoritative** set of environment variables the skill reads. Anything not on these tables does not exist. Do **not** invent variables, do **not** treat YAML schema keys as variable names, and do **not** speculate about what's set — if you're unsure, run [`searxng-health.sh`](#health-check) to find out.
+>
+> ### Required (2)
+>
+> | Variable | Required? | Purpose |
+> |----------|-----------|---------|
+> | `SEARXNG_URL` | yes | Base URL of the SearXNG instance, e.g. `http://127.0.0.1:8888`. With `services.aiAgent.enableSearxng = true` on nyxorn, this is exported automatically — assume it is set. |
+> | `SEKURVIA_AUTH_TOKEN` | no | Bearer token for protected SearXNG instances. Leave unset for local. |
+>
+> ### Optional tuning (helper script only)
+>
+> Exactly these eight, each documented further down under [Configuration Knobs](#configuration-knobs):
+>
+> `SEKURVIA_TIMEOUT_S`, `SEKURVIA_MAX_RESULTS`, `SEKURVIA_SAFESEARCH`, `SEKURVIA_LANGUAGE`, `SEKURVIA_USER_AGENT`, `SEKURVIA_ALLOWED_DOMAINS`, `SEKURVIA_BLOCKED_DOMAINS`, `SEKURVIA_MAX_RESPONSE_BYTES`.
+>
+> ### Names that look real but are NOT env vars
+>
+> Models sometimes hallucinate these. They are **not** read by the skill or the helper. Do not mention them to the user as configuration:
+>
+> | Looks like | What it actually is | Don't confuse with |
+> |------------|---------------------|--------------------|
+> | `REQUIRED_ENVIRONMENT_VARIABLES` | The YAML *frontmatter key* (`required_environment_variables:`) that *contains* the variable list. It's a schema label, not a variable. | `SEARXNG_URL` |
+> | `SEKURVIA_ENABLED` | Does not exist anywhere. Possibly confused with the nyxorn NixOS option `services.aiAgent.enableSearxng = true`, which is a **module option**, not an env var, and is set on the host, not in the agent's environment. | `SEKURVIA_AUTH_TOKEN` |
+> | `SEARXNG_API_KEY` / `SEARXNG_TOKEN` | SearXNG itself is API-key-free; only `SEKURVIA_AUTH_TOKEN` exists, and only for reverse-proxy bearer auth. | `SEKURVIA_AUTH_TOKEN` |
+> | `SEKURVIA_URL` | Backwards swap of the namespace. The real variable is `SEARXNG_URL`. | `SEARXNG_URL` |
+>
+> ### Reporting state to the user
+>
+> If you don't know whether `SEARXNG_URL` is set, **do not** assert that it isn't and do **not** fabricate a "reduced functionality" mode. Either:
+>
+> 1. Run `bash "$HERMES_HOME/skills/research/searxng-search/scripts/searxng-health.sh"` and report what it actually says, or
+> 2. Try the search via Method 0 / 1 and let the real error (if any) surface.
 
 Preferred when:
 
@@ -349,7 +384,7 @@ When wiring SearXNG into [nyxorn](https://github.com/xor-xe/nyxorn), `services.a
 
 ## Configuration Knobs
 
-In addition to the two `required_environment_variables`, the helper script honors a handful of optional tuning vars (all read from the agent's environment):
+In addition to the two required env vars listed in the [canonical environment-variables table](#-environment-variables--canonical-list) at the top of this skill (`SEARXNG_URL` and the optional `SEKURVIA_AUTH_TOKEN`), the helper script honors a handful of optional tuning vars (all read from the agent's environment). These eight, and only these eight:
 
 | Variable | Default | Description |
 |----------|---------|-------------|

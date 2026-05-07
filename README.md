@@ -10,7 +10,7 @@ This repo is a **skill tap** — one repo, one or more `<skill-name>/SKILL.md` d
 
 ---
 
-## What's in v0.1.0
+## What's in v0.2.1
 
 A single skill, `searxng-search`, focused on general web search:
 
@@ -43,10 +43,10 @@ Each is its own SKILL.md directory, installed independently.
 ### 1. From this GitHub repo (recommended)
 
 ```bash
-hermes skills install xor-xe/sekurvia/searxng-search
+hermes skills install xor-xe/Sekurvia/searxng-search
 ```
 
-Hermes fetches the skill from `github.com/xor-xe/sekurvia` at the
+Hermes fetches the skill from `github.com/xor-xe/Sekurvia` at the
 `searxng-search/` subpath, runs its security scanner, and copies it
 to `~/.hermes/skills/research/searxng-search/`.
 
@@ -54,7 +54,7 @@ to `~/.hermes/skills/research/searxng-search/`.
 
 ```bash
 hermes skills install \
-  https://raw.githubusercontent.com/xor-xe/sekurvia/main/searxng-search/SKILL.md \
+  https://raw.githubusercontent.com/xor-xe/Sekurvia/main/searxng-search/SKILL.md \
   --name searxng-search
 ```
 
@@ -65,7 +65,7 @@ the full bundle.
 ### 3. Manual / dev install
 
 ```bash
-git clone https://github.com/xor-xe/sekurvia ~/code/sekurvia
+git clone https://github.com/xor-xe/Sekurvia ~/code/sekurvia
 mkdir -p ~/.hermes/skills/research
 ln -s ~/code/sekurvia/searxng-search ~/.hermes/skills/research/searxng-search
 ```
@@ -76,11 +76,13 @@ effect immediately. For a copy install, replace `ln -s` with `cp -r`.
 ### 4. NixOS via [nyxorn](https://github.com/xor-xe/nyxorn)
 
 `services.aiAgent.enableSearxng = true;` already starts a local SearXNG
-on `127.0.0.1:8888` and exposes `SEARXNG_URL` to Hermes. You only need
-to install the skill itself:
+on `127.0.0.1:8888` and exposes `SEARXNG_URL=http://127.0.0.1:8888` to
+Hermes. You only need to install the skill itself, via nyxorn's
+declarative `hermes.skills` slot — keys are `<category>/<name>` paths,
+values point at a directory containing `SKILL.md`:
 
 ```nix
-{ config, ... }: {
+{ pkgs, ... }: {
   services.aiAgent = {
     enable = true;
     engine = "hermes";
@@ -88,29 +90,45 @@ to install the skill itself:
     enableSearxng = true;
     searxng.secretKey = "<openssl rand -hex 32>";
 
-    hermes = {
-      # nyxorn already exposes SEARXNG_URL=http://127.0.0.1:8888 to Hermes
-      # automatically when enableSearxng = true. The skill picks it up.
-
-      documents = {
-        # Drop the skill bundle into HERMES_HOME at activation time.
-        "skills/research/searxng-search" = {
-          source = pkgs.fetchFromGitHub {
-            owner = "user";
-            repo  = "sekurvia";
-            rev   = "v0.1.0";
-            hash  = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-          } + "/searxng-search";
-        };
-      };
-    };
+    # nyxorn exports SEARXNG_URL automatically when enableSearxng = true,
+    # so the skill picks it up with no extra environment plumbing.
+    hermes.skills."research/searxng-search" =
+      (pkgs.fetchFromGitHub {
+        owner = "xor-xe";
+        repo  = "Sekurvia";
+        rev   = "main";          # or pin a tagged release, e.g. "v0.2.1"
+        hash  = "sha256-...";    # nix-prefetch-github or `nix flake prefetch`
+      }) + "/searxng-search";
   };
 }
 ```
 
-(If your nyxorn version doesn't expose `documents` for nested-path
-mounts, fall back to the manual install in Section 3 — it's a one-line
-symlink against `/var/lib/nyxorn-agent/.hermes/skills/research/`.)
+If you already track Sekurvia as a flake input, the same option becomes
+a one-liner:
+
+```nix
+# in flake.nix:
+inputs.sekurvia.url = "github:xor-xe/Sekurvia";
+inputs.sekurvia.flake = false;
+
+# in your host module:
+{ inputs, ... }: {
+  services.aiAgent.hermes.skills."research/searxng-search" =
+    inputs.sekurvia + "/searxng-search";
+}
+```
+
+That is exactly the shape nyxorn's own README documents and the form
+used by working installs in the wild — values are paths, the
+`/searxng-search` suffix selects this skill's directory, and nyxorn
+symlinks it into `$HERMES_HOME/skills/research/searxng-search` and
+cleans up stale entries on rebuild.
+
+> **Don't use `hermes.documents` for skills.** Older drafts of this
+> README suggested mounting the bundle into `skills/research/...` via
+> `hermes.documents`. That works only by accident, bypasses nyxorn's
+> stale-skill cleanup, and won't show up in `hermes skills list`. Use
+> `hermes.skills` instead.
 
 ---
 
@@ -272,7 +290,7 @@ expect, and how to format the answer.
 Install paths stay independent:
 
 ```bash
-hermes skills install xor-xe/sekurvia/searxng-news
+hermes skills install xor-xe/Sekurvia/searxng-news
 ```
 
 That's the whole expansion story — no shared Python package, no
@@ -296,7 +314,7 @@ sed -i '/^\s*-\s*sekurvia\s*$/d' ~/.hermes/config.yaml   # drop from plugins.ena
 pip uninstall -y sekurvia 2>/dev/null || true
 
 # install the skill
-hermes skills install xor-xe/sekurvia/searxng-search
+hermes skills install xor-xe/Sekurvia/searxng-search
 ```
 
 Your `SEARXNG_URL` env var carries over unchanged.
@@ -306,8 +324,8 @@ Your `SEARXNG_URL` env var carries over unchanged.
 ## Development
 
 ```bash
-git clone https://github.com/xor-xe/sekurvia
-cd sekurvia
+git clone https://github.com/xor-xe/Sekurvia
+cd Sekurvia
 
 # Validate SKILL.md frontmatter
 python3 -c '
