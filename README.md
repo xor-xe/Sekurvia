@@ -2,324 +2,348 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Sekurvia** is a Hermes Agent **skill** that gives the agent privacy-respecting web search through a self-hosted [SearXNG](https://searxng.org/) instance — no third-party API key, no SaaS round-trip.
+**Sekurvia** is an [MCP](https://modelcontextprotocol.io/) server that gives [Hermes Agent](https://hermes-agent.nousresearch.com/) (and any other MCP-compatible client) reliable, schema-typed access to **self-hosted [SearXNG](https://searxng.org/) web search** and **[trafilatura](https://trafilatura.readthedocs.io/)-based content extraction**.
 
-> **Skill, not plugin.** Hermes [skills](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills) are markdown documents the agent loads on demand (via `skill_view`) and a bundle of supporting helper scripts. They wrap CLIs/APIs without compiling Python code into Hermes core. Sekurvia is the SearXNG counterpart to the bundled `duckduckgo-search` skill.
+It is the answer to "Hermes can't actually answer 'latest news on X' or 'current price of Y' even though my SearXNG is up." Sekurvia exposes two tools to the agent's tool list with strict JSON schemas:
 
-This repo is a **skill tap** — one repo, one or more `<skill-name>/SKILL.md` directories — so it can grow to include `searxng-images`, `searxng-news`, etc. without restructuring.
+- `mcp_sekurvia_search` — `{query, max_results, time_range, language, safesearch, categories, page}` → `{count, results: [{title, url, snippet, engine, score}]}`
+- `mcp_sekurvia_read` — `{url, max_chars, include_links}` → `{title, author, publish_date, content, content_length, truncated, ...}`
 
----
+Because they're real tools (not prose loaded via a slash command), even small models like `gpt-oss:20b` call them correctly: no hallucinated tool names like `searxng-search`, no invented arg fields like `recency_days` / `categories: []` / `max_results` on the wrong tool, no fake env vars like `REQUIRED_ENVIRONMENT_VARIABLES` or `SEKURVIA_ENABLED`. The schema is the contract; the model can't escape it.
 
-## What's in v0.2.1
+```mermaid
+flowchart LR
+  user["latest news on AI"] --> hermes["Hermes Agent / gpt-oss:20b"]
+  hermes --> toolList{"Tool list with real schemas"}
+  toolList --> mcpSekSearch["mcp_sekurvia_search<br/>(ours, preferred)"]
+  toolList --> mcpSekRead["mcp_sekurvia_read<br/>(ours, preferred)"]
+  toolList --> mcpSearxng["mcp_searxng_*<br/>(Hermes built-in, fallback)"]
+  mcpSekSearch --> srv["Sekurvia MCP server<br/>(Python, stdio)"]
+  mcpSekRead --> srv
+  srv --> searxng["SearXNG @ 127.0.0.1:8888"]
+  srv --> tra["trafilatura"]
+  tra --> result_urls["result URLs"]
+  searxng --> answer["titles + URLs + snippets"]
+  tra --> answer2["cleaned markdown"]
+  answer --> hermes
+  answer2 --> hermes
+  hermes --> reply["synthesized + cited answer"]
+```
 
-A single skill, `searxng-search`, focused on general web search:
+## Repo layout
 
 ```text
-sekurvia/
-├── README.md                          ← this file
-├── LICENSE                            ← MIT
-├── .gitignore
-└── searxng-search/                    ← installable skill
-    ├── SKILL.md                       ← skill body (loaded by skill_view)
-    ├── scripts/
-    │   ├── searxng-query.sh           ← hardened curl+jq wrapper around the JSON API
-    │   └── searxng-health.sh          ← 10-second connectivity probe
-    └── references/
-        └── searxng-api.md             ← on-demand deeper API reference
+Sekurvia/
+├── flake.nix                          ← packages.<sys>.sekurvia-mcp + nixosModules.default + overlays.default
+├── pyproject.toml                     ← Python build (hatchling) + dev deps + ruff/pytest config
+├── src/sekurvia_mcp/
+│   ├── server.py                      ← MCP server (stdio) — registers `search` + `read`
+│   ├── search.py                      ← SearXNG JSON-API client (async httpx)
+│   ├── read.py                        ← URL → trafilatura → cleaned markdown
+│   ├── config.py                      ← env-var loading + validation
+│   └── filters.py                     ← SSRF / domain allow-block
+├── tests/                             ← pytest (56 cases): config, filters, search, read, server
+├── modules/nixos/sekurvia.nix         ← NixOS module wiring into nyxorn's hermes.mcpServers
+├── examples/nyxorn.nix                ← copy-pasteable host config
+└── searxng-search/                    ← Legacy skill, slimmed to a 65-line routing pointer
+    ├── SKILL.md
+    ├── scripts/                       ← bash escape hatches (searxng-query.sh, searxng-health.sh)
+    └── references/searxng-api.md      ← on-demand SearXNG API reference
 ```
 
-Future siblings under the same root (planned):
+## Quickstart — NixOS via [nyxorn](https://github.com/xor-xe/nyxorn)
 
-- `searxng-images/` — image-search shape with `categories=images`.
-- `searxng-news/` — fresh-news shape with `categories=news` + `time_range=day`.
-- `searxng-videos/` — video-search shape.
+This is the path the project was designed for. nyxorn already runs Hermes, runs a local SearXNG, and exports `SEARXNG_URL=http://127.0.0.1:8888` to the agent's environment. All Sekurvia adds is the MCP server + a tiny skill.
 
-Each is its own SKILL.md directory, installed independently.
-
----
-
-## Install
-
-### 1. From this GitHub repo (recommended)
-
-```bash
-hermes skills install xor-xe/Sekurvia/searxng-search
-```
-
-Hermes fetches the skill from `github.com/xor-xe/Sekurvia` at the
-`searxng-search/` subpath, runs its security scanner, and copies it
-to `~/.hermes/skills/research/searxng-search/`.
-
-### 2. Direct URL (single-file SKILL.md)
-
-```bash
-hermes skills install \
-  https://raw.githubusercontent.com/xor-xe/Sekurvia/main/searxng-search/SKILL.md \
-  --name searxng-search
-```
-
-This installs only `SKILL.md`. The helper scripts under `scripts/` are
-**not** included via direct URL install — use the GitHub path above for
-the full bundle.
-
-### 3. Manual / dev install
-
-```bash
-git clone https://github.com/xor-xe/Sekurvia ~/code/sekurvia
-mkdir -p ~/.hermes/skills/research
-ln -s ~/code/sekurvia/searxng-search ~/.hermes/skills/research/searxng-search
-```
-
-A symlink is preferred for development so edits in your checkout take
-effect immediately. For a copy install, replace `ln -s` with `cp -r`.
-
-### 4. NixOS via [nyxorn](https://github.com/xor-xe/nyxorn)
-
-`services.aiAgent.enableSearxng = true;` already starts a local SearXNG
-on `127.0.0.1:8888` and exposes `SEARXNG_URL=http://127.0.0.1:8888` to
-Hermes. You only need to install the skill itself, via nyxorn's
-declarative `hermes.skills` slot — keys are `<category>/<name>` paths,
-values point at a directory containing `SKILL.md`:
+### 1. Add Sekurvia as a flake input
 
 ```nix
-{ pkgs, ... }: {
-  services.aiAgent = {
-    enable = true;
-    engine = "hermes";
+# flake.nix
+{
+  inputs = {
+    nixpkgs.url    = "github:NixOS/nixpkgs/nixos-unstable";
+    nyxorn.url     = "github:xor-xe/nyxorn";
+    sekurvia.url   = "github:xor-xe/Sekurvia";
 
-    enableSearxng = true;
-    searxng.secretKey = "<openssl rand -hex 32>";
+    # Recommended: keep nixpkgs aligned so Python deps resolve from one tree.
+    sekurvia.inputs.nixpkgs.follows = "nixpkgs";
+  };
 
-    # nyxorn exports SEARXNG_URL automatically when enableSearxng = true,
-    # so the skill picks it up with no extra environment plumbing.
-    hermes.skills."research/searxng-search" =
-      (pkgs.fetchFromGitHub {
-        owner = "xor-xe";
-        repo  = "Sekurvia";
-        rev   = "main";          # or pin a tagged release, e.g. "v0.2.1"
-        hash  = "sha256-...";    # nix-prefetch-github or `nix flake prefetch`
-      }) + "/searxng-search";
+  outputs = inputs@{ nixpkgs, nyxorn, sekurvia, ... }: {
+    nixosConfigurations.yourhost = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      specialArgs = { inherit inputs; };
+      modules = [
+        nyxorn.nixosModules.default
+        sekurvia.nixosModules.default
+        ./host.nix
+      ];
+    };
   };
 }
 ```
 
-If you already track Sekurvia as a flake input, the same option becomes
-a one-liner:
+### 2. Wire it into your host config
 
 ```nix
-# in flake.nix:
-inputs.sekurvia.url = "github:xor-xe/Sekurvia";
-inputs.sekurvia.flake = false;
+# host.nix
+{ pkgs, inputs, ... }: {
+  nixpkgs.overlays = [ inputs.sekurvia.overlays.default ];
 
-# in your host module:
-{ inputs, ... }: {
-  services.aiAgent.hermes.skills."research/searxng-search" =
-    inputs.sekurvia + "/searxng-search";
+  services.aiAgent = {
+    enable          = true;
+    engine          = "hermes";
+    enableSearxng   = true;
+    searxng.secretKey = "<openssl rand -hex 32>";
+
+    defaultModel = "gpt-oss:20b";   # any model works; bigger ones answer more accurately
+
+    # Skill body — routing pointer, not a tool. ~65 lines.
+    hermes.skills."research/searxng-search" =
+      inputs.sekurvia + "/searxng-search";
+
+    # The MCP tools. Auto-enabled when engine == "hermes".
+    sekurvia.enable = true;
+
+    hermes.settings = {
+      toolsets              = [ "all" ];
+      memory.memory_enabled = true;
+    };
+  };
 }
 ```
 
-That is exactly the shape nyxorn's own README documents and the form
-used by working installs in the wild — values are paths, the
-`/searxng-search` suffix selects this skill's directory, and nyxorn
-symlinks it into `$HERMES_HOME/skills/research/searxng-search` and
-cleans up stale entries on rebuild.
+A complete host module is in [examples/nyxorn.nix](examples/nyxorn.nix).
 
-> **Don't use `hermes.documents` for skills.** Older drafts of this
-> README suggested mounting the bundle into `skills/research/...` via
-> `hermes.documents`. That works only by accident, bypasses nyxorn's
-> stale-skill cleanup, and won't show up in `hermes skills list`. Use
-> `hermes.skills` instead.
+### 3. Rebuild and verify
 
----
+```bash
+sudo nixos-rebuild switch --flake .#yourhost
+nyxorn-status                       # confirm hermes-agent + searxng services are up
+
+# In a Hermes session:
+/searxng-search what is the latest news on AI agents
+```
+
+The model should pick `mcp_sekurvia_search` first (the assertive tool description steers it there), optionally call `mcp_sekurvia_read` on the most relevant URL, and answer with citations. If you instead see it pick `mcp_searxng_searxng_web_search` (Hermes' auto-registered toolset), that's also fine — both work; Sekurvia's variant just has a richer schema and trafilatura-cleaned output.
+
+## Quickstart — non-nyxorn Hermes
+
+For a plain Hermes install:
+
+```bash
+pip install sekurvia-mcp           # or: pipx install sekurvia-mcp
+
+# Make sure SearXNG is reachable and JSON format is enabled.
+export SEARXNG_URL=http://127.0.0.1:8888
+```
+
+Add to your Hermes `config.yaml`:
+
+```yaml
+mcpServers:
+  sekurvia:
+    command: sekurvia-mcp
+    args: []
+    env:
+      SEARXNG_URL: http://127.0.0.1:8888
+      # Optional auth + tuning vars below.
+```
+
+(Optionally also drop the `searxng-search/` directory into `~/.hermes/skills/research/` so the slash command is available.)
+
+## Tool reference
+
+### `mcp_sekurvia_search`
+
+> Search the live web via a self-hosted SearXNG instance. Use this for ANY query requiring real-time data: latest news, current prices, recent events, library or API documentation lookup, fact-checking. Returns titles, URLs, and snippets. Pair with `sekurvia_read` to fetch full page content. Always prefer this over guessing facts you don't already know.
+
+| Field | Type | Required | Default | Notes |
+|---|---|---|---|---|
+| `query` | string | yes | — | Plain text, max 1024 chars. |
+| `max_results` | integer | no | `10` | 1–50 hard ceiling. |
+| `time_range` | enum | no | `""` | `"day"` for breaking news, `"week"`, `"month"`, `"year"`, or `""`. |
+| `language` | string | no | `"auto"` | ISO 639-1 code, or `auto` / `all`. |
+| `safesearch` | integer | no | `1` | `0` off, `1` moderate, `2` strict. |
+| `categories` | string | no | `""` | Comma-separated SearXNG categories: `general`, `news`, `it`, `science`, etc. |
+| `page` | integer | no | `1` | Pagination, 1–20. |
+
+Response envelope:
+
+```json
+{
+  "query": "...",
+  "count": 5,
+  "results": [
+    { "title": "...", "url": "https://...", "snippet": "...", "engine": "duckduckgo", "score": 0.83 }
+  ],
+  "engines_unresponsive": []
+}
+```
+
+Or on failure:
+
+```json
+{ "error": "...", "kind": "ConfigError|ValidationError|NetworkError|RemoteError|InternalError" }
+```
+
+### `mcp_sekurvia_read`
+
+> Fetch a URL and return the main article text as cleaned markdown — ads, navigation, comment threads, and footer boilerplate are stripped via trafilatura. Use after `sekurvia_search` on the most relevant result(s). Default returns up to 8000 chars; pass `max_chars` (up to 50000) to extend. Refuses non-routable / private hosts and `file://` schemes.
+
+| Field | Type | Required | Default | Notes |
+|---|---|---|---|---|
+| `url` | string | yes | — | Absolute http(s) URL. SSRF-checked. |
+| `max_chars` | integer | no | `8000` | 500–50000. |
+| `include_links` | boolean | no | `false` | Preserve inline links in the markdown output. |
+
+Response envelope:
+
+```json
+{
+  "url": "https://...",
+  "title": "Article title",
+  "author": "Ada Lovelace",
+  "publish_date": "2026-04-01",
+  "content": "# Article title\n\nMain article body, cleaned, in markdown...",
+  "content_length": 4321,
+  "truncated": false,
+  "content_type": "text/html; charset=utf-8"
+}
+```
+
+Same `{error, kind}` envelope on failure.
 
 ## Configuration
 
-The skill needs **one** environment variable to function. Hermes prompts
-for it the first time the skill is loaded if it isn't already set.
+The MCP server reads exactly two required env vars and a handful of optional tuning ones — anything else is invented. nyxorn supplies the required one automatically when `services.aiAgent.enableSearxng = true`.
 
-| Variable | Required | Description |
+### Required (2)
+
+| Variable | Required? | Description |
 | --- | --- | --- |
-| `SEARXNG_URL` | yes | Base URL of your SearXNG instance. Must include scheme. Example: `http://127.0.0.1:8888`. |
-| `SEKURVIA_AUTH_TOKEN` | no | `Authorization: Bearer …` for protected SearXNG instances. Skip for local use. |
+| `SEARXNG_URL` | yes | Base URL of your SearXNG instance, e.g. `http://127.0.0.1:8888`. Must include scheme. |
+| `SEKURVIA_AUTH_TOKEN` | no | `Authorization: Bearer …` for protected SearXNG instances. Skip for local. |
 
-Optional tuning vars (the skill picks sensible defaults; only set when
-you know you need them):
+### Optional tuning
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SEKURVIA_TIMEOUT_S` | `10` | Per-request timeout in seconds. |
-| `SEKURVIA_MAX_RESULTS` | `10` | Default `--max-results` for the helper. Hard cap: 50. |
-| `SEKURVIA_SAFESEARCH` | `1` | Default safesearch level: 0 off / 1 moderate / 2 strict. |
-| `SEKURVIA_LANGUAGE` | `auto` | Default ISO language code. |
-| `SEKURVIA_USER_AGENT` | `hermes-searxng-skill/0.1` | UA sent to SearXNG. |
-| `SEKURVIA_ALLOWED_DOMAINS` | unset | Comma-separated allowlist; if set, only matching hosts are returned. |
-| `SEKURVIA_BLOCKED_DOMAINS` | unset | Comma-separated blocklist. |
-| `SEKURVIA_MAX_RESPONSE_BYTES` | `2097152` (2 MiB) | Response size cap. Hard cap: 16 MiB. |
+| `SEKURVIA_TIMEOUT_S` | `10` | Per-request timeout (seconds). 1–120. |
+| `SEKURVIA_MAX_RESULTS` | `10` | Default cap for `max_results`. 1–50. |
+| `SEKURVIA_SAFESEARCH` | `1` | Default safesearch level. 0–2. |
+| `SEKURVIA_LANGUAGE` | `auto` | Default ISO 639-1 language. |
+| `SEKURVIA_USER_AGENT` | `sekurvia-mcp/0.3` | UA sent to SearXNG and to fetched pages. |
+| `SEKURVIA_ALLOWED_DOMAINS` | unset | Comma-separated host allowlist; subdomains match. If set, only matching hosts pass the URL filter. |
+| `SEKURVIA_BLOCKED_DOMAINS` | unset | Comma-separated host blocklist; takes precedence over the allowlist. |
+| `SEKURVIA_MAX_RESPONSE_BYTES` | `2097152` (2 MiB) | Hard cap on response sizes. 1024–16777216. |
 | `SEKURVIA_MAX_SNIPPET` | `500` | Per-result snippet truncation length. |
 | `SEKURVIA_HEALTH_TIMEOUT_S` | `5` | Timeout for `searxng-health.sh`. |
+| `SEKURVIA_LOG_LEVEL` | `INFO` | Logger level (`DEBUG`/`INFO`/`WARNING`/`ERROR`). Logs go to stderr; stdout is reserved for the MCP protocol. |
 
-Hermes `required_environment_variables` machinery handles the
-`SEARXNG_URL` and `SEKURVIA_AUTH_TOKEN` prompts on first use; the rest
-are read from the agent's environment if set, otherwise the bundled
-defaults apply.
+### Variable names that are NOT real
 
----
+A few names that small models like to invent: **none of these exist** and the server does not read them. If a tool response complains about configuration, only the variables in the tables above are relevant.
 
-## How the skill is used
+| Looks like | Reality |
+|---|---|
+| `REQUIRED_ENVIRONMENT_VARIABLES` | A YAML schema label in SKILL.md frontmatter, not a variable. |
+| `SEKURVIA_ENABLED` | Doesn't exist. Probably confused with the nyxorn module option `services.aiAgent.enableSearxng`, which is a NixOS option, not an env var. |
+| `SEARXNG_API_KEY` / `SEARXNG_TOKEN` | SearXNG itself is API-key-free; only `SEKURVIA_AUTH_TOKEN` exists, and only for reverse-proxy bearer auth. |
+| `SEKURVIA_URL` | Backwards. The variable is `SEARXNG_URL`. |
 
-Once installed, the agent can:
+## Coexistence with Hermes' built-in `mcp_searxng_*`
 
-1. Run `/searxng-search` as a slash command — Hermes loads the SKILL.md
-   into the model's context.
-2. **If an `mcp_searxng_*` MCP toolset is exposed** (e.g. via the
-   upstream [`mcp-searxng`](https://github.com/ihor-sokoliuk/mcp-searxng)
-   server), call `mcp_searxng_searxng_web_search` directly with
-   `{query, pageno?, time_range?, language?, safesearch?}` — no shell
-   needed. SKILL.md teaches the model the correct argument shape so it
-   doesn't hallucinate a tool literally named `searxng-search` or pass
-   non-existent fields like `recency_days` / `categories` / `max_results`.
-3. Otherwise, have the model call the bundled helper via `terminal`:
-   ```bash
-   bash "$HERMES_HOME/skills/research/searxng-search/scripts/searxng-query.sh" \
-        -q "fastapi deployment guide" -n 5
-   ```
-   …and pipe the JSON to `jq` for parsing.
-4. Run `searxng-health.sh` first if it suspects the instance is down.
-5. Load `references/searxng-api.md` via
-   `skill_view("searxng-search", "references/searxng-api.md")` for
-   deeper API detail (engines, categories, response shape).
+When nyxorn sets `services.aiAgent.enableSearxng = true` and you ask Hermes to enable `toolsets = [ "all" ]`, Hermes auto-registers an MCP server named `searxng` exposing `mcp_searxng_searxng_web_search` and `mcp_searxng_web_url_read`. Sekurvia is **additive** — it registers a different MCP server name (`sekurvia`), so the model sees both:
 
-The skill auto-hides itself when Hermes' built-in `web_search` tool is
-available (via `fallback_for_toolsets: [web]`), so it doesn't clutter
-the context for users who already have a SaaS web tool wired up. When
-only the MCP `searxng` tools are present (no `web_search`), the skill
-stays loaded — its job there is precisely to teach the model the right
-argument shape for those MCP tools.
+| Tool | Source | When the model picks it |
+|---|---|---|
+| `mcp_sekurvia_search` | Sekurvia | Preferred — assertive description, richer args (categories, page), filter-tuneable. |
+| `mcp_sekurvia_read` | Sekurvia | Preferred — trafilatura-cleaned markdown, `max_chars` knob, SSRF-safe. |
+| `mcp_searxng_searxng_web_search` | Hermes built-in | Fallback. |
+| `mcp_searxng_web_url_read` | Hermes built-in | Fallback. |
 
-> **`searxng-search` is the skill name, not a tool name.** A common
-> failure mode is the model emitting a tool call with
-> `name: "searxng-search"`, which Hermes rejects with
-> `Tool 'searxng-search' does not exist.` The SKILL.md body now has a
-> prominent "Not a tool" callout instructing the model to invoke
-> `mcp_searxng_searxng_web_search` (or `terminal` running the helper)
-> instead. If you still see the hallucination on a small model, prefer
-> a stricter / instruction-tuned model and confirm the skill is
-> actually being loaded into context.
+Both work. Tool descriptions and the slimmed `searxng-search/SKILL.md` route the model toward Sekurvia for the cleaner output, but if for any reason it lands on `mcp_searxng_*`, your search still happens.
 
----
+If you want a single search provider in the tool list, disable Hermes' built-in via your nyxorn config (consult `services.aiAgent.hermes.settings.toolsets` to opt out of `searxng` while keeping the rest). Sekurvia stays unchanged either way.
+
+## Migration from v0.2.x (skill-only)
+
+If you were on the previous markdown-skill release:
+
+```nix
+# v0.2.x — still valid, the skill itself stays
+services.aiAgent.hermes.skills."research/searxng-search" =
+  inputs.sekurvia + "/searxng-search";
+```
+
+For v0.3.0, **add** the MCP server:
+
+```nix
+# in flake.nix
+inputs.sekurvia.url = "github:xor-xe/Sekurvia";
+
+# in your host module
+nixpkgs.overlays = [ inputs.sekurvia.overlays.default ];
+
+imports = [ inputs.sekurvia.nixosModules.default ];
+
+services.aiAgent.sekurvia.enable = true;   # auto-true when engine == "hermes"
+```
+
+Nothing else changes. The skill directory name (`searxng-search`), the slash command (`/searxng-search`), the env vars, and the helper scripts stay where they were. The new SKILL.md body just routes the model toward `mcp_sekurvia_*` instead of teaching prose-only methods.
+
+## Smoke-test sequence
+
+After the first install or after any change:
+
+```bash
+# 1. Build the package + run unit tests in one step.
+nix flake check
+
+# 2. Optional — start the server interactively over stdio (Ctrl-D to quit).
+SEARXNG_URL=http://127.0.0.1:8888 nix run .#sekurvia-mcp
+
+# 3. After `nixos-rebuild switch`, verify the agent picked it up.
+nyxorn-status
+journalctl -u hermes-agent -n 50 --no-pager
+
+# 4. In a Hermes session — the actual end-to-end smoke test.
+/searxng-search what is the latest news on AI agents
+```
+
+What you want to see in the model's reasoning trace:
+
+1. A call to `mcp_sekurvia_search` with `{ "query": "...", "time_range": "day" }` (or similar).
+2. A call to `mcp_sekurvia_read` on the most relevant result URL.
+3. A short answer that cites the URL.
+
+What you do **not** want to see — and what v0.3.0 makes structurally impossible:
+
+- A tool call named `searxng-search` (that's the skill, not a tool).
+- Arguments like `recency_days`, `categories: []`, or `max_results` on the MCP search tool — they're not in the schema; the server returns a `ValidationError` envelope.
+- The model claiming `REQUIRED_ENVIRONMENT_VARIABLES` or `SEKURVIA_ENABLED` are unset — they don't exist and the README plus SKILL.md both call this out explicitly.
+
+If `gpt-oss:20b` ignores the tool descriptions and tries to answer from training data (a weakness of small models in general, not of Sekurvia), bump to one of your bigger pre-pulled models:
+
+```nix
+services.aiAgent.defaultModel = "qwen3.6:35b";  # or "gemma4:26b"
+```
+
+Both will follow the tool routing reliably. `gpt-oss:20b` is fine for casual chat where strict tool-call discipline doesn't matter.
 
 ## Security model
 
-Defense-in-depth, defined as conventions the skill teaches the agent and
-hard-enforced inside the helper scripts:
+Defense-in-depth, mostly inherited from the v0.2.x bash helper and reimplemented in Python:
 
-- **Localhost by default** — operators are guided to set
-  `SEARXNG_URL=http://127.0.0.1:8888`. Queries never leave the host.
-- **No redirect following** — `curl --fail` plus explicit non-redirect
-  flags prevent being bounced off-instance.
-- **Response size cap** — 2 MiB via `curl --max-filesize`; refuse
-  larger bodies as `RemoteError` instead of trying to parse them.
-- **HTML stripping** — every `title` / `snippet` is run through `jq`
-  filters to drop tag soup before the model sees it.
-- **URL filtering** — the helper drops result URLs whose host resolves
-  to loopback / link-local / private / multicast / reserved space
-  unless explicitly allowlisted.
-- **Optional bearer auth** — `SEKURVIA_AUTH_TOKEN` is only sent when
-  set, never logged, and surfaced via Hermes' secure setup prompt.
-- **No content fetching** — the skill never visits result URLs.
-  Agents that want page bodies must use a separate fetcher
-  (`web_extract`, browser tools) with its own SSRF guard.
-- **Strict timeouts** — every curl invocation has `--max-time` bounded.
-- **JSON-only output** — every error path emits a typed JSON object
-  (`{"error": "...", "kind": "..."}`), never a partial body.
-
----
-
-## Verifying the install
-
-After installing, run from a Hermes session:
-
-```text
-/searxng-search "what is hermes agent"
-```
-
-The agent should:
-
-1. See `SEARXNG_URL` is set (or prompt you to set it).
-2. Call `searxng-health.sh` and confirm the instance is up + JSON enabled.
-3. Call `searxng-query.sh -q "what is hermes agent" -n 5` and return a
-   list of titles + URLs + snippets.
-
-If step 2 fails with `JSON format is NOT enabled`, add `json` to your
-SearXNG instance's `settings.yml`:
-
-```yaml
-search:
-  formats:
-    - html
-    - json
-```
-
-…and restart SearXNG. (nyxorn does this for you when
-`services.aiAgent.enableSearxng = true`.)
-
----
-
-## Extending — adding image / news / video skills
-
-The repo is a tap, so adding a sibling skill is a matter of dropping a
-new directory next to `searxng-search/`. Recommended layout for a new
-skill `searxng-news`:
-
-```text
-sekurvia/
-├── searxng-search/
-└── searxng-news/
-    ├── SKILL.md                       ← describe news-specific flow
-    └── scripts/
-        └── searxng-news.sh            ← thin wrapper that calls
-                                        searxng-query.sh with
-                                        --categories news --time-range day
-```
-
-Reuse the existing `scripts/searxng-query.sh` — it already supports
-`--categories` and `--time-range`. The new SKILL.md mostly explains
-when the agent should reach for news vs general search, what fields to
-expect, and how to format the answer.
-
-Install paths stay independent:
-
-```bash
-hermes skills install xor-xe/Sekurvia/searxng-news
-```
-
-That's the whole expansion story — no shared Python package, no
-versioned plugin entry point, no rebuild.
-
----
-
-## Migration from the v0.1.0 plugin shape
-
-Earlier drafts of Sekurvia shipped as a Hermes **plugin** (a Python
-package registering a `web_search` tool). That's a valid pattern but
-overkill for "wrap a CLI/API and tell the agent how to use it" — which
-is exactly what skills are designed for.
-
-If you installed the previous plugin shape:
-
-```bash
-# remove the old plugin install, if any
-rm -rf ~/.hermes/plugins/sekurvia
-sed -i '/^\s*-\s*sekurvia\s*$/d' ~/.hermes/config.yaml   # drop from plugins.enabled
-pip uninstall -y sekurvia 2>/dev/null || true
-
-# install the skill
-hermes skills install xor-xe/Sekurvia/searxng-search
-```
-
-Your `SEARXNG_URL` env var carries over unchanged.
-
----
+- **Localhost by default** — operators are expected to point `SEARXNG_URL` at `127.0.0.1`. Search queries never leave the host.
+- **No redirect-following** — `httpx.AsyncClient(follow_redirects=False)`. A 3xx surfaces as a `RemoteError` instead of being chased to an unknown host.
+- **Response size caps** — 2 MiB default, 16 MiB hard ceiling. Reject larger bodies as `RemoteError`.
+- **Bounded timeout** — 10s default per request; configurable via `SEKURVIA_TIMEOUT_S` up to 120s.
+- **HTML stripping** — every `title` / `snippet` runs through `<…>`-stripping before the model sees it. `read` tool output goes through trafilatura (which already drops scripts/styles/nav/footer).
+- **SSRF guard** — `mcp_sekurvia_read` rejects URLs that resolve to loopback / link-local / private / multicast / reserved address space. Override per-host with `SEKURVIA_ALLOWED_DOMAINS`.
+- **Optional bearer auth** — `SEKURVIA_AUTH_TOKEN` is sent only when set, never logged.
+- **Transport isolation** — `httpx.AsyncClient(trust_env=False)` so HTTP_PROXY etc. from a misconfigured host shell can't redirect search/read traffic.
 
 ## Development
 
@@ -327,31 +351,35 @@ Your `SEARXNG_URL` env var carries over unchanged.
 git clone https://github.com/xor-xe/Sekurvia
 cd Sekurvia
 
-# Validate SKILL.md frontmatter
-python3 -c '
-import re, sys, yaml, pathlib
-p = pathlib.Path("searxng-search/SKILL.md").read_text()
-m = re.match(r"^---\n(.*?)\n---\n", p, re.S)
-assert m, "frontmatter missing"
-fm = yaml.safe_load(m.group(1))
-assert fm["name"] == "searxng-search"
-assert len(fm["description"]) <= 1024
-print("ok:", fm["name"], "v" + fm["version"])
-'
+# Editable install + dev deps
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
 
-# Lint the helpers
-shellcheck searxng-search/scripts/*.sh
+# Run the test suite (56 cases, ~1s).
+.venv/bin/pytest -q
 
-# Smoke-test the helper end-to-end against your SearXNG
-SEARXNG_URL=http://127.0.0.1:8888 \
-  bash searxng-search/scripts/searxng-health.sh
+# Lint
+.venv/bin/ruff check src tests
 
-SEARXNG_URL=http://127.0.0.1:8888 \
-  bash searxng-search/scripts/searxng-query.sh -q "hermes agent" -n 3 \
-  | jq .
+# Or via nix
+nix flake check
+nix run .#sekurvia-mcp        # run the server interactively
 ```
 
----
+Validate the slimmed SKILL.md frontmatter:
+
+```bash
+python3 -c '
+import re, pathlib
+p = pathlib.Path("searxng-search/SKILL.md").read_text()
+m = re.match(r"^---\n(.*?)\n---\n", p, re.S)
+front = m.group(1)
+def field(n):
+    mm = re.search(rf"^{n}:\s*(.+)$", front, re.M)
+    return mm.group(1).strip() if mm else None
+print("ok:", field("name"), "v" + field("version"), "desc_len=" + str(len(field("description"))))
+'
+```
 
 ## License
 

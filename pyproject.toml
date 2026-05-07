@@ -1,0 +1,73 @@
+[project]
+name = "sekurvia-mcp"
+version = "0.3.0"
+description = "Hermes Agent MCP server that exposes self-hosted SearXNG search and trafilatura-based content extraction as `mcp_sekurvia_search` and `mcp_sekurvia_read`."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "xor-xe" }]
+requires-python = ">=3.11"
+keywords = ["mcp", "hermes", "searxng", "search", "trafilatura"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries",
+]
+
+dependencies = [
+    "mcp>=1.0.0",
+    "httpx>=0.27",
+    "trafilatura>=1.12",
+    "pydantic>=2.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+sekurvia-mcp = "sekurvia_mcp.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/xor-xe/Sekurvia"
+Repository = "https://github.com/xor-xe/Sekurvia"
+Issues = "https://github.com/xor-xe/Sekurvia/issues"
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sekurvia_mcp"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = [
+    "E501",
+    "RUF002",  # ambiguous unicode in docstrings (en-dashes are intentional)
+    "RUF003",  # ambiguous unicode in comments
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
