@@ -1,7 +1,7 @@
 ---
 name: searxng-search
 description: Routes the model to the Sekurvia MCP web-search and web-read tools. Not a callable tool itself — invoke `mcp_sekurvia_search` (preferred) or `mcp_searxng_searxng_web_search` (fallback) instead. Sized to fit in any model's working context without crowding the toolset.
-version: 0.3.0
+version: 0.3.1
 author: xor-xe
 license: MIT
 metadata:
@@ -26,9 +26,51 @@ the real tools listed below.
 These are exposed by the Sekurvia MCP server. Their **full input schema is
 already in your tool list** — read it there. Do not invent fields.
 
+## Tool name format (read this carefully)
+
+Tool names are **flat snake_case identifiers** that you must copy
+verbatim from your tool list. They are NOT colon-namespaced.
+
+✅ Correct: `mcp_sekurvia_search`, `mcp_sekurvia_read`,
+`mcp_searxng_searxng_web_search`, `mcp_searxng_web_url_read`
+
+❌ Wrong, do not invent: `mcp:search:mcp_search`, `mcp:sekurvia:search`,
+`sekurvia.search`, `mcp.search`, `searxng_search` (no `mcp_sekurvia_`
+prefix), or any name containing `:` or `.`.
+
+If your instinct produces a tool name with a colon or a dot in it,
+**stop and re-read the tool list** — the right name is already there.
+
+### Worked example
+
+User asks: "give me latest updates on the USA vs Iran conflict"
+
+Step 1 — single tool call, exactly this shape:
+
+```json
+{
+  "name": "mcp_sekurvia_search",
+  "arguments": {
+    "query": "latest updates USA Iran conflict",
+    "time_range": "day"
+  }
+}
+```
+
+Step 2 — pick 1–3 result URLs, then for each:
+
+```json
+{
+  "name": "mcp_sekurvia_read",
+  "arguments": { "url": "https://example.com/article" }
+}
+```
+
+Step 3 — synthesize a concise answer citing each URL.
+
 ## Hermes built-in (acceptable fallback if Sekurvia is absent)
 
-- `mcp_searxng_searxng_web_search`
+- `mcp_searxng_searxng_web_search`  (yes, `searxng` appears twice — that's the real name)
 - `mcp_searxng_web_url_read`
 
 ## Procedure for "latest / current / recent X" questions
@@ -42,6 +84,9 @@ already in your tool list** — read it there. Do not invent fields.
 
 ## Don't
 
+- Do not invent tool names. The only valid identifiers are the four listed
+  above. Names with `:` or `.` separators (e.g. `mcp:search:mcp_search`)
+  do not exist on this stack and the runtime will reject them.
 - Do not pass `recency_days`, `categories: []`, or `max_results` blindly —
   the schema in your tool list is authoritative.
 - Do not speculate about whether `SEARXNG_URL` is set or invent variables

@@ -43,18 +43,23 @@ SEARCH_DESCRIPTION = (
     "Search the live web via a self-hosted SearXNG instance. Use this for ANY "
     "query requiring real-time data: latest news, current prices, recent events, "
     "library or API documentation lookup, fact-checking. Returns a list of "
-    "{title, url, snippet} entries. Pair with `sekurvia_read` to fetch full page "
-    "content for the most relevant result(s). Always prefer this over guessing "
-    "facts you don't already know — when the user asks about anything time-"
-    "sensitive, call this tool first."
+    "{title, url, snippet} entries. Pair with `mcp_sekurvia_read` to fetch full "
+    "page content for the most relevant result(s). Always prefer this over "
+    "guessing facts you don't already know — when the user asks about anything "
+    "time-sensitive, call this tool first.\n\n"
+    "Tool name when calling: `mcp_sekurvia_search` (flat snake_case identifier; "
+    "no colons, no dots, no namespacing — copy it exactly from your tool list)."
 )
 
 READ_DESCRIPTION = (
     "Fetch a URL and return the main article text as cleaned markdown — ads, "
     "navigation, comment threads, and footer boilerplate are stripped via "
-    "trafilatura. Use after `sekurvia_search` on the most relevant result(s). "
-    "Default returns up to 8000 chars; pass `max_chars` (up to 50000) to extend. "
-    "Refuses non-routable / private hosts and `file://` schemes."
+    "trafilatura. Use after `mcp_sekurvia_search` on the most relevant "
+    "result(s). Default returns up to 8000 chars; pass `max_chars` (up to "
+    "50000) to extend. Refuses non-routable / private hosts and `file://` "
+    "schemes.\n\n"
+    "Tool name when calling: `mcp_sekurvia_read` (flat snake_case identifier; "
+    "no colons, no dots, no namespacing — copy it exactly from your tool list)."
 )
 
 
