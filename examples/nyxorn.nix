@@ -51,9 +51,11 @@
     engine          = "hermes";
     gpuAcceleration = "cuda";
 
-    # Local SearXNG on 127.0.0.1:8888. nyxorn auto-exports
-    # SEARXNG_URL into nyxorn-agent's environment, so the MCP
-    # server picks it up with no extra plumbing.
+    # Local SearXNG on 127.0.0.1:8888. The Sekurvia NixOS module reads
+    # `services.aiAgent.searxng.url` and injects it as SEARXNG_URL on the
+    # MCP child process explicitly — Hermes' MCP launcher doesn't propagate
+    # the gateway's own env, so this extra step is necessary. Override
+    # via `services.aiAgent.sekurvia.searxngUrl` for a remote SearXNG.
     enableSearxng        = true;
     searxng.secretKey    = "<openssl rand -hex 32>";
 

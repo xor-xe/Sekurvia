@@ -20,6 +20,27 @@
 let
   agent = config.services.aiAgent or { };
   cfg = agent.sekurvia or { };
+
+  # Hermes' MCP launcher does NOT propagate the gateway process's environment
+  # to MCP child subprocesses, so even though nyxorn sets SEARXNG_URL on the
+  # Hermes service, both `mcp_searxng_*` and `mcp_sekurvia_*` get spawned
+  # without it and fail with "SEARXNG_URL not set". We work around this by
+  # reading nyxorn's `services.aiAgent.searxng.url` (which exists when
+  # `enableSearxng = true` and defaults to http://127.0.0.1:8888) and
+  # injecting it explicitly into `mcpServers.sekurvia.env`.
+  inheritedSearxngUrl =
+    if (agent.enableSearxng or false)
+    then lib.attrByPath [ "searxng" "url" ] "http://127.0.0.1:8888" agent
+    else null;
+
+  finalSearxngUrl =
+    if cfg.searxngUrl != null then cfg.searxngUrl else inheritedSearxngUrl;
+
+  derivedEnv =
+    lib.optionalAttrs (finalSearxngUrl != null) { SEARXNG_URL = finalSearxngUrl; };
+
+  # extraEnv wins on conflict — explicit user override beats the derived default.
+  mergedEnv = derivedEnv // cfg.extraEnv;
 in
 {
   options.services.aiAgent.sekurvia = {
@@ -65,15 +86,39 @@ in
       '';
     };
 
+    searxngUrl = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      defaultText = lib.literalExpression
+        ''config.services.aiAgent.searxng.url, or null when enableSearxng = false'';
+      description = ''
+        URL of the SearXNG instance the MCP server should query. Passed to
+        the child process as the `SEARXNG_URL` environment variable.
+
+        When left `null` (the default) and
+        `services.aiAgent.enableSearxng = true`, this is auto-derived from
+        nyxorn's `services.aiAgent.searxng.url`
+        (which itself defaults to `http://127.0.0.1:8888`).
+
+        Set explicitly when:
+          - You run SearXNG on a different host or port.
+          - You don't use nyxorn's `enableSearxng` and host SearXNG yourself.
+      '';
+      example = "http://searxng.internal.lan:8888";
+    };
+
     extraEnv = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
       description = ''
         Extra environment variables passed to the MCP server process.
-        `SEARXNG_URL` is supplied by nyxorn when
-        `services.aiAgent.enableSearxng = true`, so you typically don't
-        need to set anything here. Use this for `SEKURVIA_AUTH_TOKEN` or
-        any of the `SEKURVIA_*` tuning variables.
+
+        `SEARXNG_URL` is auto-derived from `services.aiAgent.searxng.url`
+        when `enableSearxng = true`; you only need to set it here if you
+        want to override that derivation. Use this option for
+        `SEKURVIA_AUTH_TOKEN` or any of the `SEKURVIA_*` tuning variables.
+
+        Anything set here wins over the auto-derived `SEARXNG_URL`.
       '';
       example = lib.literalExpression ''{
         SEKURVIA_MAX_RESULTS = "15";
@@ -86,7 +131,7 @@ in
     services.aiAgent.hermes.mcpServers.sekurvia = {
       command = lib.getExe cfg.package;
       args = [ ];
-      env = cfg.extraEnv;
+      env = mergedEnv;
     };
   };
 }

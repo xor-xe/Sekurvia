@@ -156,7 +156,9 @@ mcpServers:
 
 ### `mcp_sekurvia_search`
 
-> Search the live web via a self-hosted SearXNG instance. Use this for ANY query requiring real-time data: latest news, current prices, recent events, library or API documentation lookup, fact-checking. Returns titles, URLs, and snippets. Pair with `sekurvia_read` to fetch full page content. Always prefer this over guessing facts you don't already know.
+> Search the live web via a self-hosted SearXNG instance. Use this for ANY query requiring real-time data: latest news, current prices, recent events, library or API documentation lookup, fact-checking. Returns titles, URLs, and snippets. Pair with `mcp_sekurvia_read` to fetch full page content. Always prefer this over guessing facts you don't already know.
+>
+> Tool name when calling: `mcp_sekurvia_search` (flat snake_case identifier; no colons, no dots, no namespacing — copy it exactly from your tool list).
 
 | Field | Type | Required | Default | Notes |
 |---|---|---|---|---|
@@ -189,7 +191,9 @@ Or on failure:
 
 ### `mcp_sekurvia_read`
 
-> Fetch a URL and return the main article text as cleaned markdown — ads, navigation, comment threads, and footer boilerplate are stripped via trafilatura. Use after `sekurvia_search` on the most relevant result(s). Default returns up to 8000 chars; pass `max_chars` (up to 50000) to extend. Refuses non-routable / private hosts and `file://` schemes.
+> Fetch a URL and return the main article text as cleaned markdown — ads, navigation, comment threads, and footer boilerplate are stripped via trafilatura. Use after `mcp_sekurvia_search` on the most relevant result(s). Default returns up to 8000 chars; pass `max_chars` (up to 50000) to extend. Refuses non-routable / private hosts and `file://` schemes.
+>
+> Tool name when calling: `mcp_sekurvia_read` (flat snake_case identifier; no colons, no dots, no namespacing — copy it exactly from your tool list).
 
 | Field | Type | Required | Default | Notes |
 |---|---|---|---|---|
@@ -216,7 +220,9 @@ Same `{error, kind}` envelope on failure.
 
 ## Configuration
 
-The MCP server reads exactly two required env vars and a handful of optional tuning ones — anything else is invented. nyxorn supplies the required one automatically when `services.aiAgent.enableSearxng = true`.
+The MCP server reads exactly two required env vars and a handful of optional tuning ones — anything else is invented. The Sekurvia NixOS module reads `services.aiAgent.searxng.url` (which nyxorn defaults to `http://127.0.0.1:8888` when `enableSearxng = true`) and injects it as `SEARXNG_URL` directly on the MCP child process.
+
+> **Why the explicit injection?** Hermes does set `SEARXNG_URL` on the gateway process itself, but its MCP launcher does not propagate that env to MCP child subprocesses. As a result, the upstream `mcp_searxng_*` toolset and any other MCP server that expects `SEARXNG_URL` to "just be there" get spawned with an empty environment and report `SEARXNG_URL not set`. The Sekurvia module sidesteps this by passing the variable through `mcpServers.sekurvia.env` explicitly. If you want to override (remote SearXNG, different port), set `services.aiAgent.sekurvia.searxngUrl` or put `SEARXNG_URL` into `services.aiAgent.sekurvia.extraEnv` (the latter wins).
 
 ### Required (2)
 
@@ -323,6 +329,7 @@ What you do **not** want to see — and what v0.3.0 makes structurally impossibl
 - A tool call named `searxng-search` (that's the skill, not a tool).
 - Arguments like `recency_days`, `categories: []`, or `max_results` on the MCP search tool — they're not in the schema; the server returns a `ValidationError` envelope.
 - The model claiming `REQUIRED_ENVIRONMENT_VARIABLES` or `SEKURVIA_ENABLED` are unset — they don't exist and the README plus SKILL.md both call this out explicitly.
+- A tool name with `:` or `.` separators (e.g. `mcp:search:mcp_search`, `mcp.sekurvia.search`). These are model hallucinations — the runtime rejects them. The only valid names are the four flat-snake-case identifiers shown in your tool list. v0.3.1 of the SKILL.md and the tool descriptions explicitly call this out.
 
 If `gpt-oss:20b` ignores the tool descriptions and tries to answer from training data (a weakness of small models in general, not of Sekurvia), bump to one of your bigger pre-pulled models:
 
